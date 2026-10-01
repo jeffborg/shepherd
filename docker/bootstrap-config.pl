@@ -101,7 +101,13 @@ if (-e $conffile) {
     print "bootstrap: $conffile exists, leaving it alone\n";
     exit 0;
 }
-die "bootstrap: SHEPHERD_REGION must be set to generate shepherd.conf\n" unless ($region);
+# Not fatal: the image must still answer --version/--capabilities and run a
+# single grabber without a region. Shepherd raises its own error if it is
+# actually asked to grab without configuration.
+unless ($region) {
+    print "bootstrap: SHEPHERD_REGION not set; skipping shepherd.conf\n";
+    exit 0;
+}
 
 my $pref_title_source        = undef;
 my $want_paytv_channels      = 0;
