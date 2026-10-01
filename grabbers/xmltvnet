@@ -1,0 +1,211 @@
+#!/usr/bin/env perl
+#
+# xmltvnet - Shepherd grabber for prebuilt regional XMLTV files (xmltv.net)
+#
+# Shepherd's other free-to-air grabber, rex, scrapes a detail page per
+# programme: excellent metadata, but hours for a full region. This grabber
+# fetches one prebuilt file for the region in a few seconds.
+#
+# Declared category 2 (fast) / quality 2, which scores below rex (quality 3).
+# That is intentional: rex has the richer data and should win the standard
+# stage, while this covers whatever rex does not finish within its max_runtime
+# or cannot fetch at all. Being category 2 also makes it eligible for the
+# "expanded" stage, which seeks episode names and excludes category 1
+# grabbers. reconciler_mk2 merges whatever ran, field by field.
+#
+# Source files are generated from YourTV, the same place rex scrapes, so the
+# two agree on programming and differ mainly in depth.
+#
+# changelog:
+#   1.00  initial version
+#
+# Usage (Shepherd calls this for you):
+#   xmltvnet --region 184 --output out.xmltv --channels_file channels.conf
+#   xmltvnet --url http://example/guide.xml --output out.xmltv --channels_file channels.conf
+
+use strict;
+use warnings;
+
+# XMLTV::Writer is defined inside XMLTV.pm; there is no XMLTV/Writer.pm to load.
+use XMLTV;
+use IO::File;
+use Getopt::Long qw(:config pass_through);
+use File::Temp qw(tempfile);
+
+use JSON;
+
+use Shepherd::Common;
+
+my $progname = "xmltvnet";
+my $version = "1.00";
+
+# Shepherd region id -> xmltv.net region file.
+# Regenerate/verify with util/check_channel_map.py --check-regions.
+my %REGION_FILE = (
+    63  => 'Broken_Hill',          66  => 'Central_Coast',
+    67  => 'Griffith',             69  => 'Tamworth',
+    71  => 'Wollongong',           73  => 'Sydney',
+    74  => 'Darwin',               75  => 'Brisbane',
+    78  => 'Goldcoast',            79  => 'Cairns',
+    81  => 'Adelaide',             82  => 'Renmark',
+    83  => 'Riverland',            85  => 'South_East_SA',
+    86  => 'Spencer_Gulf',         88  => 'TAS_Regional',
+    90  => 'Ballarat',             93  => 'Geelong',
+    94  => 'Melbourne',            95  => 'Mildura_Sunraysia',
+    98  => 'Gippsland',            101 => 'Perth',
+    102 => 'WA_Regional',          106 => 'Remote_Central',
+    107 => 'Remote_Central',       108 => 'Remote_Central',
+    114 => 'Remote_Central',       126 => 'Canberra',
+    184 => 'Newcastle',            254 => 'Rockhampton',
+    255 => 'Sunshine_Coast',       256 => 'Toowoomba',
+    257 => 'Townsville',           258 => 'Wide_Bay',
+    259 => 'South_Coast',          261 => 'Lismore',
+    262 => 'Orange_Dubbo',         263 => 'Taree_Port_Macquarie',
+    264 => 'Wagga_Wagga',          266 => 'Bendigo',
+    267 => 'Shepparton',           268 => 'Albury_Wodonga',
+);
+my $BASE_URL = 'http://xmltv.net/xml_files';
+my $YOURTV_API = 'https://www.yourtv.com.au/api';
+
+my $opt;
+my %stats;
+my $url_override;
+GetOptions('url=s' => \$url_override);
+
+Shepherd::Common::program_begin(\$opt, $progname, $version, \%stats);
+
+my ($channels, $opt_channels) = Shepherd::Common::read_channels($opt);
+my %subscribed = (%{$channels || {}}, %{$opt_channels || {}});
+die "No subscribed channels.\n" unless (keys %subscribed);
+
+my $url = $url_override;
+unless ($url) {
+    my $file = $REGION_FILE{$opt->{region}};
+    die "No xmltv.net file known for region $opt->{region}. ".
+        "Add it to %REGION_FILE or pass --url.\n" unless ($file);
+    $url = "$BASE_URL/$file.xml";
+}
+
+Shepherd::Common::log("Fetching $url");
+my $data = Shepherd::Common::get_url(url => $url, retries => 3);
+die "Failed to fetch $url\n" unless ($data);
+$stats{bytes} = length($data);
+
+# The file is tens of MB of XML; parse it from disk with the callback API so we
+# never hold the whole document in memory.
+my ($fh, $tmp) = tempfile("$progname-XXXXXX", TMPDIR => 1, UNLINK => 1);
+binmode($fh);
+print $fh $data;
+close $fh;
+undef $data;
+
+# Window Shepherd asked for, as YYYYMMDD bounds.
+my $day = 24 * 60 * 60;
+my $from = &datestr(time + ($opt->{offset} * $day));
+my $to   = &datestr(time + (($opt->{offset} + $opt->{days}) * $day));
+Shepherd::Common::log("Keeping programmes from $from to $to");
+
+# source channel id -> our xmltv_id, for the channels we actually want
+my %wanted;
+my %seen_name;
+
+# xmltv.net names its channels descriptively ("NBN NSW", "7 Northern,
+# Newcastle") while Shepherd and YourTV use short names ("NBN", "Seven"), so
+# display-name matching does not work. Both do, however, key on the YourTV
+# channel id -- xmltv.net ids are literally "<yourtv-id>auepg.com.au" -- so we
+# map by id and fall back to the display name for any other source.
+my %yourtv_name;
+unless ($url_override) {
+    my $json = Shepherd::Common::get_url(
+        url => "$YOURTV_API/regions/$opt->{region}/channels", retries => 2);
+    if ($json) {
+        my $list = eval { decode_json($json) };
+        if (ref $list eq 'ARRAY') {
+            $yourtv_name{$_->{id}} = $_->{name} for grep { $_->{id} && $_->{name} } @$list;
+            Shepherd::Common::log(sprintf "Mapped %d YourTV channel ids for region %s",
+                                  scalar(keys %yourtv_name), $opt->{region});
+        }
+    }
+    Shepherd::Common::log("WARNING: no YourTV id map; falling back to display names")
+        unless (keys %yourtv_name);
+}
+
+my $writer;
+my $lang = $opt->{lang} || 'en';
+
+sub datestr
+{
+    my @t = localtime(shift);
+    return sprintf "%04d%02d%02d", $t[5] + 1900, $t[4] + 1, $t[3];
+}
+
+sub encoding_cb { }
+
+sub credits_cb
+{
+    my %writer_args = (encoding => 'UTF-8');
+    if ($opt->{outputfile}) {
+        my $fh2 = new IO::File(">$opt->{outputfile}")
+            or die "Cannot write to $opt->{outputfile}: $!";
+        $writer_args{OUTPUT} = $fh2;
+    }
+    $writer = new XMLTV::Writer(%writer_args);
+    $writer->start({
+        'source-info-url'    => $BASE_URL,
+        'source-info-name'   => 'xmltv.net',
+        'generator-info-name' => "$progname $version",
+    });
+}
+
+# Match the source's channel naming to Shepherd's. Shepherd::Common knows the
+# usual aliases, so a source rename only needs fixing in one place.
+sub channel_cb
+{
+    my $c = shift;
+    my $id = $c->{id};
+
+    my @names;
+    if (my ($ytid) = ($id || '') =~ /^(\d+)auepg\.com\.au$/) {
+        push @names, $yourtv_name{$ytid} if (defined $yourtv_name{$ytid});
+    }
+    push @names, map { ref($_) ? $_->[0] : $_ } @{$c->{'display-name'} || []};
+
+    for my $name (@names) {
+        next unless (defined $name && length $name);
+        my $shep = Shepherd::Common::translate_channel_name($name, \%subscribed);
+        next unless ($shep && $subscribed{$shep});
+        next if ($seen_name{$shep}++);   # first display-name wins
+        $wanted{$id} = $subscribed{$shep};
+        $writer->write_channel({
+            'id' => $subscribed{$shep},
+            'display-name' => [[ $shep, $lang ]],
+        });
+        $stats{channels}++;
+        last;
+    }
+}
+
+sub programme_cb
+{
+    my $p = shift;
+    my $xmltvid = $wanted{$p->{channel} || ''};
+    unless (defined $xmltvid) { $stats{skipped_channel}++; return; }
+
+    my ($date) = ($p->{start} || '') =~ /^(\d{8})/;
+    unless (defined $date && $date ge $from && $date lt $to) {
+        $stats{outside_window}++;
+        return;
+    }
+
+    $p->{channel} = $xmltvid;
+    $writer->write_programme($p);
+    $stats{programmes}++;
+}
+
+XMLTV::parsefiles_callback(\&encoding_cb, \&credits_cb, \&channel_cb, \&programme_cb, $tmp);
+
+die "Source had none of our subscribed channels.\n" unless ($stats{channels});
+$writer->end();
+
+Shepherd::Common::program_end($opt, %stats);
+exit(0);
