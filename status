@@ -10,11 +10,11 @@ reference       TMDB.pm             1.2.1.1
 grabber         oztivo              2.66
 #grabber         sbsweb              5.08.2
 grabber         rex                 10.4.14
-grabber         xmltvnet            1.00
+grabber         xmltvnet            1.02
 grabber         foxtel_swf          5.10
 grabber         abc_website         7.09
 #grabber         freeview            1.0.8
-reconciler      reconciler_mk2      0.58
+reconciler      reconciler_mk2      0.59
 postprocessor   metacritic          1.1
 postprocessor   augment_timezone    0.30
 postprocessor	add_channel_icons   0.4

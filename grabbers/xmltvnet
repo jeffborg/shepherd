@@ -37,7 +37,7 @@ use JSON;
 use Shepherd::Common;
 
 my $progname = "xmltvnet";
-my $version = "1.00";
+my $version = "1.02";
 
 # Shepherd region id -> xmltv.net region file.
 # Regenerate/verify with util/check_channel_map.py --check-regions.
@@ -87,9 +87,44 @@ unless ($url) {
     $url = "$BASE_URL/$file.xml";
 }
 
-Shepherd::Common::log("Fetching $url");
-my $data = Shepherd::Common::get_url(url => $url, retries => 3);
-die "Failed to fetch $url\n" unless ($data);
+# xmltv.net regenerates once a day and asks consumers not to poll harder than
+# that. Shepherd may call a grabber several times in one run while filling
+# gaps, so the fetched file is cached and reused; without this a single run
+# could pull the same ~8MB file repeatedly.
+my $cache = $opt->{cache_file};
+$cache =~ s/\.storable\.cache$//;
+$cache .= '.source.xml';
+my $max_age = ($ENV{XMLTVNET_CACHE_HOURS} || 12) * 3600;
+
+my $data;
+if (!$opt->{no_cache} && -r $cache && (time - (stat $cache)[9]) < $max_age) {
+    Shepherd::Common::log(sprintf "Using cached source (%d min old): %s",
+                          (time - (stat $cache)[9]) / 60, $cache);
+    local (@ARGV, $/) = ($cache);
+    $data = <>;
+    $stats{cache_hits}++;
+}
+
+unless ($data) {
+    Shepherd::Common::log("Fetching $url");
+    # Identify ourselves rather than impersonating a browser: this is a public
+    # static file, not a site that needs convincing, and an operator seeing
+    # traffic deserves to know who it is.
+    $data = Shepherd::Common::get_url(
+        url     => $url,
+        retries => 3,
+        fake    => 0,
+        agent   => "shepherd-$progname/$version (+https://github.com/jeffborg/shepherd)",
+    );
+    die "Failed to fetch $url\n" unless ($data);
+    if (open(my $cf, '>', $cache)) {
+        binmode($cf);
+        print $cf $data;
+        close $cf;
+    } else {
+        Shepherd::Common::log("WARNING: could not cache source to $cache: $!");
+    }
+}
 $stats{bytes} = length($data);
 
 # The file is tens of MB of XML; parse it from disk with the callback API so we
@@ -116,13 +151,23 @@ my %seen_name;
 # channel id -- xmltv.net ids are literally "<yourtv-id>auepg.com.au" -- so we
 # map by id and fall back to the display name for any other source.
 my %yourtv_name;
+my %yourtv_logo;
 unless ($url_override) {
     my $json = Shepherd::Common::get_url(
         url => "$YOURTV_API/regions/$opt->{region}/channels", retries => 2);
     if ($json) {
         my $list = eval { decode_json($json) };
         if (ref $list eq 'ARRAY') {
-            $yourtv_name{$_->{id}} = $_->{name} for grep { $_->{id} && $_->{name} } @$list;
+            for my $c (grep { $_->{id} && $_->{name} } @$list) {
+                $yourtv_name{$c->{id}} = $c->{name};
+                # Channel logos come free with this response. Upstream's
+                # add_channel_icons postprocessor cannot help here: its
+                # logo_list.txt is keyed by pre-rename channel names and most
+                # of its URLs are dead, so icons come from the same live
+                # source as the names instead.
+                my $logo = ref $c->{logo} eq 'HASH' ? $c->{logo}{url} : undef;
+                $yourtv_logo{$c->{id}} = $logo if ($logo);
+            }
             Shepherd::Common::log(sprintf "Mapped %d YourTV channel ids for region %s",
                                   scalar(keys %yourtv_name), $opt->{region});
         }
@@ -166,8 +211,10 @@ sub channel_cb
     my $id = $c->{id};
 
     my @names;
+    my $logo;
     if (my ($ytid) = ($id || '') =~ /^(\d+)auepg\.com\.au$/) {
         push @names, $yourtv_name{$ytid} if (defined $yourtv_name{$ytid});
+        $logo = $yourtv_logo{$ytid};
     }
     push @names, map { ref($_) ? $_->[0] : $_ } @{$c->{'display-name'} || []};
 
@@ -177,10 +224,15 @@ sub channel_cb
         next unless ($shep && $subscribed{$shep});
         next if ($seen_name{$shep}++);   # first display-name wins
         $wanted{$id} = $subscribed{$shep};
-        $writer->write_channel({
+        my $channel = {
             'id' => $subscribed{$shep},
             'display-name' => [[ $shep, $lang ]],
-        });
+        };
+        if ($logo) {
+            $channel->{icon} = [ { src => $logo } ];
+            $stats{channel_icons}++;
+        }
+        $writer->write_channel($channel);
         $stats{channels}++;
         last;
     }

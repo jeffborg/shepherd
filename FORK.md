@@ -106,21 +106,35 @@ This fork does not try to revive Shepherd's unmaintained grabbers. `sbsweb` is
 still disabled upstream, and `oztivo`, `foxtel_swf` and `abc_website` are carried
 unchanged. For free-to-air Australia the working set is `rex` + `xmltvnet`.
 
+## Icons
+
+Upstream's icon path is dead twice over, so this takes a different route.
+
+`add_channel_icons` looks logos up by exact channel name in `logo_list.txt`,
+which still carries pre-rename names (`ABC3`, `SBS TWO`, `Prime`, `TVS`) — and
+fixing the names would not help much, because the URLs behind them have rotted
+too: imageshack entries 404, `imagestore.ugbox.net` no longer resolves, and 116
+of the entries point at Foxtel, which is irrelevant for free-to-air.
+
+`reconciler_mk2` separately dropped every `<icon>`, because `icon` was not in
+any of its merge lists — so even a grabber that supplied logos appeared not to.
+
+Instead, `xmltvnet` emits channel icons from YourTV's own logo URLs. It already
+calls that API for the channel-id map, so the logos come free in the same
+response, they are current, and they are keyed by id rather than by a name that
+can be renamed out from under them. `reconciler_mk2` now carries `icon` through
+for both channels and programmes (versions 0.59 and 1.01).
+
+`add_channel_icons` is left in place and unchanged; it simply has nothing to add
+when the grabber has already supplied icons.
+
 ## Known limitations
-
-**No channel icons in the output.** Two separate causes, neither fixed here:
-
-- `reconciler_mk2` merges a fixed list of fields and `icon` is not among them,
-  so programme icons from any grabber are dropped during reconciliation. That is
-  upstream behaviour, not a regression.
-- `add_channel_icons` looks up logos by exact channel name in `logo_list.txt`,
-  which still carries pre-rename names (`ABC3`, `SBS TWO`, `Prime`, `TVS`).
-  Against corrected channel maps it now matches nothing. This is the same rot as
-  the channel maps, in a second file; fixing it properly means routing the
-  lookup through the rename rules rather than hand-editing a second name list.
-  The postprocessor also fetches `logo_list.txt` from upstream's release branch
-  via a hardcoded URL, so it would need repointing at this fork as well.
 
 **`oztivo` and `the_movie_db_augment` fail their readiness test** in the
 container and are skipped. Neither is needed for free-to-air; `oztivo`'s
 `tvguide.oztivo.net` no longer resolves at all.
+
+**xmltv.net asks for one fetch a day.** `xmltvnet` caches the downloaded file
+alongside its cache file and reuses it for 12 hours (`XMLTVNET_CACHE_HOURS`),
+since Shepherd may call a grabber several times in one run while filling gaps.
+It also identifies itself honestly rather than impersonating a browser.
