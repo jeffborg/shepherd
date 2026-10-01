@@ -17,6 +17,8 @@ Shepherd's region ids are YourTV's region ids (verified: 184 -> NBN/Newcastle,
     util/check_channel_map.py --region 184     # just one
     util/check_channel_map.py --region 184 --fix   # rewrite that region's line
     util/check_channel_map.py --check-regions  # verify the xmltvnet region map
+    util/check_channel_map.py --region 184 --dump-channels-conf '{id}.yourtv.au'
+                                               # a channels.conf with chosen xmltv_ids
 
 Exit status is 1 if any checked region has YourTV channels that Shepherd would
 fail to match, which is the condition worth failing a build over. Channels
@@ -154,6 +156,37 @@ def rewrite_region(region, live, channels, remaps):
     return out
 
 
+def dump_channels_conf(region, channels, remaps, fmt):
+    """Emit a Shepherd channels.conf with caller-chosen xmltv_ids.
+
+    Shepherd normally derives xmltv_ids from MythTV or generates them, which
+    makes them local to one install. A consumer that merges Shepherd's output
+    with another source needs both to agree on channel ids, and the id both
+    sides can agree on is YourTV's -- so this maps Shepherd's channel names to
+    ids built from the YourTV channel id ({id}) or name ({name}).
+
+    Keys are the names Shepherd itself uses, resolved through the same
+    translation the grabbers apply, so this stays correct as names drift.
+    """
+    cset = set(channels)
+    out = {}
+    for c in fetch_json(f"regions/{region}/channels"):
+        cid, name = str(c.get("id") or ""), (c.get("name") or "").strip()
+        if not cid or not name:
+            continue
+        shep = translate(name, cset, remaps)
+        if shep not in cset or shep in out:
+            continue   # unknown to this region, or an SD/HD pair sharing a name
+        out[shep] = fmt.format(id=cid, name=shep)
+
+    print("$channels = {")
+    print(",\n".join(f"  '{k}' => '{v}'" for k, v in sorted(out.items())))
+    print("};")
+    print("$opt_channels = {};")
+    print(f"# {len(out)} channels for region {region}", file=sys.stderr)
+    return 0
+
+
 def check_region_map():
     """Every region with a channel list should be reachable by the xmltvnet grabber."""
     src = XMLTVNET.read_text(encoding="utf-8", errors="replace")
@@ -180,6 +213,9 @@ def main():
                     help="rewrite the checked region lines from YourTV")
     ap.add_argument("--check-regions", action="store_true",
                     help="verify the xmltvnet region map covers every region")
+    ap.add_argument("--dump-channels-conf", metavar="FORMAT",
+                    help="write a channels.conf to stdout, xmltv_ids built from "
+                         "FORMAT (e.g. '{id}.yourtv.au'); needs --region")
     args = ap.parse_args()
 
     if args.check_regions:
@@ -187,6 +223,16 @@ def main():
 
     lists, renames, duplicates = parse_channel_list()
     remaps = parse_static_remaps()
+
+    if args.dump_channels_conf:
+        if not args.region or len(args.region) != 1:
+            raise SystemExit("--dump-channels-conf needs exactly one --region")
+        region = str(args.region[0])
+        if region not in lists:
+            raise SystemExit(f"region {region} has no channel list")
+        return dump_channels_conf(region, lists[region], remaps,
+                                  args.dump_channels_conf)
+
     if duplicates:
         print("unreachable duplicate region lines (Shepherd reads the first only): "
               + " ".join(sorted(duplicates, key=int)) + "\n")
