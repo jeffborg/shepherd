@@ -35,7 +35,8 @@ jobs:
             libdate-manip-perl libdatetime-format-builder-perl \
             libdatetime-format-strptime-perl libwww-perl liblwp-protocol-https-perl \
             libhtml-tree-perl libhtml-parser-perl libjson-perl libsort-versions-perl \
-            libdbi-perl libalgorithm-diff-perl liblist-compare-perl
+            libdbi-perl libalgorithm-diff-perl liblist-compare-perl \
+            libobject-tiny-perl libhttp-cache-transparent-perl
 
       # status drives both the updater and the container's staging step, so a
       # component listed but absent would ship a broken release.
@@ -55,6 +56,8 @@ jobs:
           done < status
           exit $rc
 
+      # Not every component is Perl -- references/channel_list is a plain
+      # region:channels data file -- so only check things that actually are.
       - name: Components compile
         run: |
           rc=0
@@ -62,6 +65,10 @@ jobs:
           while read -r type name version; do
             case "$type" in ''|'#'*|END) continue;; esac
             f="${type}s/$name"
+            case "$name" in
+              *.pm) ;;
+              *) head -1 "$f" | grep -q '^#!.*perl' || { echo "not Perl, skipping: $f"; continue; } ;;
+            esac
             perl -c "$f" >/dev/null 2>&1 || { echo "::error::$f does not compile"; perl -c "$f" || true; rc=1; }
           done < status
           exit $rc
