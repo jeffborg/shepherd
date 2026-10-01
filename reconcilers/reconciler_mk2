@@ -96,7 +96,7 @@ $| = 1;
 BEGIN { *CORE::GLOBAL::die = \&my_die; }
 
 my $progname = "reconciler_mk2";
-my $version = "0.58";
+my $version = "0.59";
 
 use LWP::UserAgent;
 use XMLTV;
@@ -1158,6 +1158,12 @@ sub channel_cb( $ )
 			  if (!defined $in->{channels}->{$chan}->{pref_desc});
 		}
 	}
+
+	# Keep the first channel icon any grabber offers. Without this the
+	# reconciler silently drops every <icon>, so a grabber that supplies
+	# logos appears not to.
+	$in->{channels}->{$chan}->{icon} = $c->{icon}
+	  if (defined $c->{icon} && !defined $in->{channels}->{$chan}->{icon});
 }
 
 ######################################################################################################
@@ -1331,7 +1337,9 @@ sub write_channels
 			$num_langs++;
 		}
 
-		$w->write_channel( { 'id' => $chan_id, 'display-name' => $lang_list } );
+		my $channel = { 'id' => $chan_id, 'display-name' => $lang_list };
+		$channel->{icon} = $this_chan->{icon} if (defined $this_chan->{icon});
+		$w->write_channel($channel);
 	}
 }
 
@@ -1678,6 +1686,19 @@ sub add_one_programme
 				&log($reclogic{debug_add_logic},
 				  (sprintf " - added field %s from #%d (%s) value %s",
 				  $field,$m->[$i]->{grabber_num},$m->[$i]->{grabber},$newprog->{$field}));
+			}
+		}
+
+		# (1b) merge in attributes held as a single array reference, taken
+		# whole from the first source that has one. 'icon' cannot go through
+		# the simple-array merge below: its entries are hash references, so
+		# the de-duplication there would key on HASH(0x...) and never match.
+		foreach my $field ('icon') {
+			if ((!defined $newprog->{$field}) && (defined $m->[$i]->{$field})) {
+				$newprog->{$field} = $m->[$i]->{$field};
+				&log($reclogic{debug_add_logic},
+				  (sprintf " - added field %s from #%d (%s)",
+				  $field,$m->[$i]->{grabber_num},$m->[$i]->{grabber}));
 			}
 		}
 

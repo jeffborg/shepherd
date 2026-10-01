@@ -1,0 +1,89 @@
+---
+# Broadcasters rename channels without warning, and Shepherd's response is to
+# silently stop returning them -- which is how upstream ended up with reports
+# like "10 peach and 10 bold no longer populating" sitting unanswered. This
+# checks every region against YourTV's live lineups daily and opens an issue
+# the day drift appears.
+name: Channel map
+
+on:
+  schedule:
+    # 19:10 UTC = ~06:10 AEST, after YourTV's overnight updates.
+    - cron: '10 19 * * *'
+  pull_request:
+    paths:
+      - 'references/channel_list'
+      - 'references/Shepherd/Common.pm'
+      - 'grabbers/xmltvnet'
+      - 'util/check_channel_map.py'
+      - '.github/workflows/channel-map.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Check channel map against YourTV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify every region has an xmltvnet source file
+        run: ./util/check_channel_map.py --check-regions
+
+      - name: Check channel names against YourTV
+        id: check
+        run: |
+          set +e
+          ./util/check_channel_map.py | tee /tmp/report.txt
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+        # A PR gets a hard failure; the nightly run reports via an issue
+        # instead, so a rename upstream of us never breaks the default branch.
+        continue-on-error: ${{ github.event_name == 'schedule' }}
+
+      - name: Fail the PR on drift
+        if: steps.check.outputs.status != '0' && github.event_name != 'schedule'
+        run: |
+          echo "::error::Channel map drift. Run: util/check_channel_map.py --fix"
+          exit 1
+
+      - name: Open or update an issue on drift
+        if: steps.check.outputs.status != '0' && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('/tmp/report.txt', 'utf8');
+            const title = 'Channel map drift detected against YourTV';
+            const body = [
+              'The nightly channel-map check found channels YourTV carries that',
+              'Shepherd would silently drop.',
+              '',
+              'Fix with:',
+              '```',
+              'util/check_channel_map.py --fix',
+              '```',
+              '',
+              '<details><summary>Report</summary>',
+              '',
+              '```',
+              report.trim(),
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            const {owner, repo} = context.repo;
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'channel-map',
+            });
+            if (existing.data.length) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.data[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title, body, labels: ['channel-map'],
+              });
+            }
