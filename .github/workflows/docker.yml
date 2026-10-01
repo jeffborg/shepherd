@@ -1,0 +1,95 @@
+---
+# Builds the container image. Upstream ships no image at all, and the one
+# third-party attempt on Docker Hub was last pushed over seven years ago.
+name: Docker
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'docker/**'
+      - 'status'
+      - 'applications/**'
+      - 'grabbers/**'
+      - 'references/**'
+      - 'reconcilers/**'
+      - 'postprocessors/**'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Pull requests from forks have no registry credentials, and shouldn't.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Shepherd
+            org.opencontainers.image.description=Australian TV guide data (XMLTV/EPG) for MythTV, TVHeadend and friends
+
+      # arm64 as well as amd64: these clusters are usually Raspberry Pis, and
+      # nothing in the live component set is architecture-specific.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # An image that cannot answer the XMLTV handshake is useless to MythTV
+      # and TVHeadend, so prove it before publishing.
+      - name: Smoke test
+        if: github.event_name == 'pull_request'
+        run: |
+          IMG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "--- --version"
+          docker run --rm "$IMG" shepherd --version
+          echo "--- --capabilities (must include baseline)"
+          docker run --rm "$IMG" shepherd --capabilities | tee /tmp/caps
+          grep -qx baseline /tmp/caps
+          echo "--- staged component layout"
+          docker run --rm --entrypoint sh "$IMG" -c \
+            '/usr/local/bin/entrypoint.sh true >/dev/null && ls /config/grabbers/*/ | head'
+          echo "--- xmltvnet grabber handshake"
+          docker run --rm "$IMG" grabber xmltvnet --version

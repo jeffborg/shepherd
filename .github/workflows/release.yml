@@ -1,0 +1,133 @@
+---
+# Shepherd's own updater fetches components from a `release` branch, picking the
+# newest version listed in that branch's status.csum. Upstream maintained that
+# branch by hand; here a tag builds it.
+#
+# That makes this fork usable two ways: pull the container image, or point an
+# existing Shepherd install at it and let it self-update --
+#
+#   shepherd --addsource https://raw.githubusercontent.com/<owner>/shepherd/release/
+#
+# Sources are first-wins, so added ahead of upstream this fork's components take
+# precedence and everything it does not ship still comes from upstream.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate components
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Perl dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libxmltv-perl libxml-writer-perl libxml-simple-perl libxml-dom-perl \
+            libdate-manip-perl libdatetime-format-builder-perl \
+            libdatetime-format-strptime-perl libwww-perl liblwp-protocol-https-perl \
+            libhtml-tree-perl libhtml-parser-perl libjson-perl libsort-versions-perl \
+            libdbi-perl libalgorithm-diff-perl liblist-compare-perl
+
+      # status drives both the updater and the container's staging step, so a
+      # component listed but absent would ship a broken release.
+      - name: Every component in status exists
+        run: |
+          rc=0
+          while read -r type name version; do
+            case "$type" in ''|'#'*|END) continue;; esac
+            for f in "${type}s/$name" ; do
+              [ -f "$f" ] || { echo "::error::$type $name v$version: missing $f"; rc=1; }
+            done
+            case "$name" in
+              *.pm) ;;
+              *) [ -f "${type}s/$name.conf" ] ||
+                   { echo "::error::$type $name: missing ${type}s/$name.conf"; rc=1; } ;;
+            esac
+          done < status
+          exit $rc
+
+      - name: Components compile
+        run: |
+          rc=0
+          export PERL5LIB="$PWD/references"
+          while read -r type name version; do
+            case "$type" in ''|'#'*|END) continue;; esac
+            f="${type}s/$name"
+            perl -c "$f" >/dev/null 2>&1 || { echo "::error::$f does not compile"; perl -c "$f" || true; rc=1; }
+          done < status
+          exit $rc
+
+      - name: Grabber configs parse
+        run: |
+          for c in grabbers/*.conf reconcilers/*.conf postprocessors/*.conf; do
+            [ -f "$c" ] || continue
+            perl -e 'my $config; eval do { local(@ARGV,$/)=($ARGV[0]); <> }; die "$ARGV[0]: $@" if $@;' "$c"
+          done
+          echo "all component configs parse"
+
+  release:
+    name: Publish release branch and GitHub release
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate status.csum
+        run: |
+          perl util/generate_status_csum < status > status.csum
+          echo "--- status.csum"
+          cat status.csum
+
+      # The release branch is generated output: the tagged tree plus the
+      # manifest. Rebuilt from scratch each time rather than merged.
+      - name: Publish the release branch
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B release
+          git add -f status.csum
+          git commit -m "release: status.csum for ${GITHUB_REF_NAME}"
+          git push --force origin release
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "not a tag; skipping GitHub release"
+            exit 0
+          fi
+          {
+            echo "## Install"
+            echo
+            echo '### Container'
+            echo '```'
+            echo "docker pull ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}"
+            echo '```'
+            echo
+            echo '### Existing Shepherd install'
+            echo
+            echo 'Sources are first-wins, so this takes precedence over upstream'
+            echo 'for the components it ships, and upstream still supplies the rest:'
+            echo '```'
+            echo "shepherd --addsource https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/release/"
+            echo '```'
+            echo
+            echo '## Components'
+            echo '```'
+            cat status
+            echo '```'
+          } > notes.md
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" --notes-file notes.md
