@@ -65,11 +65,17 @@ jobs:
 
       # arm64 as well as amd64: these clusters are usually Raspberry Pis, and
       # nothing in the live component set is architecture-specific.
+      # buildx cannot `load` a manifest list, so pull requests build the
+      # runner's own architecture and load it for the smoke test, while real
+      # builds go multi-arch straight to the registry.
       - name: Build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: >-
+            ${{ github.event_name == 'pull_request'
+                && 'linux/amd64'
+                || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
