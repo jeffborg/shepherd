@@ -17,7 +17,7 @@ Shepherd's region ids are YourTV's region ids (verified: 184 -> NBN/Newcastle,
     util/check_channel_map.py --region 184     # just one
     util/check_channel_map.py --region 184 --fix   # rewrite that region's line
     util/check_channel_map.py --check-regions  # verify the xmltvnet region map
-    util/check_channel_map.py --region 184 --dump-channels-conf '{id}.yourtv.au'
+    util/check_channel_map.py --region 184 --dump-channels-conf '{slug}.newcastle.au'
                                                # a channels.conf with chosen xmltv_ids
 
 Exit status is 1 if any checked region has YourTV channels that Shepherd would
@@ -163,7 +163,8 @@ def dump_channels_conf(region, channels, remaps, fmt):
     makes them local to one install. A consumer that merges Shepherd's output
     with another source needs both to agree on channel ids, and the id both
     sides can agree on is YourTV's -- so this maps Shepherd's channel names to
-    ids built from the YourTV channel id ({id}) or name ({name}).
+    ids built from YourTV's slug ({slug}), its channel id ({id}), or Shepherd's
+    own channel name ({name}).
 
     Keys are the names Shepherd itself uses, resolved through the same
     translation the grabbers apply, so this stays correct as names drift.
@@ -172,12 +173,13 @@ def dump_channels_conf(region, channels, remaps, fmt):
     out = {}
     for c in fetch_json(f"regions/{region}/channels"):
         cid, name = str(c.get("id") or ""), (c.get("name") or "").strip()
+        slug = (c.get("slug") or "").strip()
         if not cid or not name:
             continue
         shep = translate(name, cset, remaps)
         if shep not in cset or shep in out:
             continue   # unknown to this region, or an SD/HD pair sharing a name
-        out[shep] = fmt.format(id=cid, name=shep)
+        out[shep] = fmt.format(id=cid, name=shep, slug=slug or cid)
 
     print("$channels = {")
     print(",\n".join(f"  '{k}' => '{v}'" for k, v in sorted(out.items())))
@@ -215,7 +217,8 @@ def main():
                     help="verify the xmltvnet region map covers every region")
     ap.add_argument("--dump-channels-conf", metavar="FORMAT",
                     help="write a channels.conf to stdout, xmltv_ids built from "
-                         "FORMAT (e.g. '{id}.yourtv.au'); needs --region")
+                         "FORMAT with {slug}, {id} or {name} "
+                         "(e.g. '{slug}.newcastle.au'); needs --region")
     args = ap.parse_args()
 
     if args.check_regions:
