@@ -1,0 +1,20 @@
+application     shepherd            1.9.20	97eb6f54378516af58b6dcfcd721d27e076f0237	18eed0989e61fb0025dcc9443865c5b6375a8d9c
+reference       channel_list        157	98db7e8c3adfc08745e79d61b60a83dca2e797db	1106e94042f7ed29459a7121f38c577d14f11bf5
+reference       Shepherd/Common.pm  1.35	b8e59c9f7e4a13517eba974c40ba5745f3688e76	2823b54e17d5c519572bd184862a8b114c80833f
+reference       Shepherd/MythTV.pm  0.42	85f83123706d06d99d896ee3d4767d6bdff71ca1	d5f6290d8b77d537f49f43d5167a54264b2599c7
+reference       Shepherd/Configure.pm   0.43	7666e8cf87e63ed27abac3c367c6862285db6028	6a957805346a47d0a14a8c8360e3caeb1c2a09b1
+reference	    Shepherd/json_pp.pm 0.2	af7820870d7cdfd47a593929a14e06306e9fda7b	ce32f3b0dbfbc1664b69c97faa2639461d5d8c18
+reference		DateTimeFormat/XMLTV.pm		1.001	72dc2b212d733776e7f08a0e318ff5fea4e18b3a	c16512679b7051ae50ee025ea8e3225995a7e3ff
+reference		Shepherd/FreeviewHelper.pm	1.4	45a8ed942288d494668e48df2c5dbcc441125d84	74df0b400b01bd07c7932b27e46977bf5e3a2396
+reference       TMDB.pm             1.2.1.1	ce7621b4295c50bb93cb79f088cc0107807c1c0a	f49c6a479ae40bfa46ad64127b282a649fb6f314
+grabber         oztivo              2.66	00783671f4a4949e4b58ce7f8e6412be2c887ace	4aac1be7f2525cc13fb30a8f169641f8ecb3319f
+grabber         rex                 10.4.14	4ae53787498b74036bb6611ef260658a225e4842	c9b6c4d1c0c2d3ed9bb36e7d559318abc6f80142
+grabber         xmltvnet            1.03	c8b7386266c0bee1bf42f941fb5131f229ed5de7	8b159633971be47f562a33559966ef299d28e32c
+grabber         foxtel_swf          5.10	f80d8adb409ebb82a5471c1f417ee926f045fada	164a3b722ba5c2b46a299b43d936d608fd9a9f53
+grabber         abc_website         7.09	b735a8ba7be13e9653055469a126e8329fd70c1f	d9dc6094fdda009aee15dc6a57a0917bbd8c03f7
+reconciler      reconciler_mk2      0.59	53c4c0647abf244d0b22e7620bf1247e37abf689	0225240b8497ce070bc9706546bd5ef721d73f7c
+postprocessor   metacritic          1.1	5e30f527c03bbddc31a2d649c5c5c50f63848c16	59fe1817de57012e3d449e807f3941ff9e683973
+postprocessor   augment_timezone    0.30	df61b40c0943bf7568442496081a4e90d9a30fed	8b8bf1be73c1d1f1d41c5ce5ae4ea038561cf3b3
+postprocessor	add_channel_icons   0.4	a4d3d745dfcbd02fdba7c979e7990f61efcc3206	c59512c379f7ad0dca79b079c5dddce0e3be30bc
+postprocessor	the_movie_db_augment  1.0	48e20d775acf9efb58f4f48002f20aff54154808	feaac994c23554098639494a62c8483bcd91e594
+END
