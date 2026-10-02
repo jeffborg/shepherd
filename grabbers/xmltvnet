@@ -37,7 +37,7 @@ use JSON;
 use Shepherd::Common;
 
 my $progname = "xmltvnet";
-my $version = "1.02";
+my $version = "1.03";
 
 # Shepherd region id -> xmltv.net region file.
 # Regenerate/verify with util/check_channel_map.py --check-regions.
@@ -66,6 +66,17 @@ my %REGION_FILE = (
     267 => 'Shepparton',           268 => 'Albury_Wodonga',
 );
 my $BASE_URL = 'http://xmltv.net/xml_files';
+
+# The source ships programme icons pointing at a Fetch TV endpoint that no
+# longer exists -- every one of them is a 404. Passed through, they have each
+# consumer queue hundreds of failing image fetches per grab and cache the
+# failures. Channel icons are unaffected; they come from YourTV and work.
+# Override with XMLTVNET_DROP_ICON_HOSTS (comma-separated), or set it empty to
+# keep everything.
+my @DROP_ICON_HOSTS = grep { length }
+    split /\s*,\s*/, (defined $ENV{XMLTVNET_DROP_ICON_HOSTS}
+                       ? $ENV{XMLTVNET_DROP_ICON_HOSTS}
+                       : 'fetchtv.com.au');
 my $YOURTV_API = 'https://www.yourtv.com.au/api';
 
 my $opt;
@@ -248,6 +259,15 @@ sub programme_cb
     unless (defined $date && $date ge $from && $date lt $to) {
         $stats{outside_window}++;
         return;
+    }
+
+    if ($p->{icon} && @DROP_ICON_HOSTS) {
+        my @keep = grep {
+            my $src = $_->{src} || '';
+            !grep { index(lc $src, lc $_) >= 0 } @DROP_ICON_HOSTS;
+        } @{$p->{icon}};
+        $stats{dropped_dead_icons} += (@{$p->{icon}} - @keep);
+        if (@keep) { $p->{icon} = \@keep } else { delete $p->{icon} }
     }
 
     $p->{channel} = $xmltvid;
